@@ -1,0 +1,192 @@
+Overview: 
+Load CSVs to Neo4j --> Explore Graph Data --> Identify Fault Users by Simple Query --> Apply Graph Algorithm
+
+####################################################################
+Load CSVs to Neo4j
+####################################################################
+
+# Create Stars
+CREATE (s:Star {star: "1"})
+CREATE (s:Star {star: "2"})
+CREATE (s:Star {star: "3"})
+CREATE (s:Star {star: "4"})
+CREATE (s:Star {star: "5"})
+
+# Load businesses
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/business_neo2.csv' as business
+CREATE (b:Business {business_id:business.business_id})
+ SET b.name = business.name,
+ b.latitude = business.latitude,
+ b.longitude = business.longitude;
+
+# Load business category 
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/cat_neo.csv' as cat
+CREATE (c:cat {cat_name:cat.cat_name})
+
+# Connecting business and cateogory
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/business_2_cat.csv' as re
+merge(b:Business {business_id:re.business_id})
+merge(c:cat {cat_name:re.categories})
+Create (b)-[r:UNDER]->(c)
+
+# Create user
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/user_neo2.csv' as user
+WITH DISTINCT user, SPLIT(user.yelping_since, '-') AS date
+CREATE (u:User {user_id:user.user_id})
+ SET u.name = user.name,
+    u.review_count = TOINT(user.review_count),
+    u.yelp_year = TOINT(date[0]),
+    u.yelp_month = TOINT(date[1]),
+    u.yelp_date = TOINT(date[2]);
+
+# Create Reviews, and connect them to businesses, users, and stars
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/review_neo2.csv' as review
+WITH DISTINCT review, SPLIT(review.date, '-') AS date
+CREATE (rr:review {review_id : review.review_id})
+SET rr.review_year = TOINT(date[0]),
+    rr.review_month = TOINT(date[1]),
+    rr.review_date = TOINT(date[2]),
+    rr.text = review.text
+
+# Create connection among review, business, user and star
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/review_neo2.csv' as review
+merge(rr:review {review_id : review.review_id})
+merge(b:Business {business_id:review.business_id})
+merge(u:User {user_id:review.user_id})
+merge(s:Star {star:review.stars})
+Create (u)-[r:WROTE]->(rr)-[r1:ABOUT]->(b)
+Create (rr)-[r2:CONTAINS]->(s)
+
+# Create city
+USING PERIODIC COMMIT
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/business_2_city.csv' as rows
+Merge (city:city {city_name:rows.city})
+
+# Connect city to category
+USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/business_2_city.csv' as rows
+merge(b:business {business_id:rows.business_id})
+merge(c:city {city_name:rows.city})
+merge (b)-[r:LOCATED]->(c)
+
+# Connect Friends
+USING PERIODIC COMMIT 10000
+LOAD CSV WITH HEADERS FROM 'file:///D:/00_working_directory/Big_data/user_friend_list.csv' as rows
+merge(u1:User {user_id:rows.u})
+merge(u2:User {user_id:rows.f})
+merge (u1)-[r:FRIEND]->(u2)
+
+# Find Important Users by PageRank
+CALL apoc.algo.pageRankWithCypher(
+    {
+      iterations: 20,
+      write: false,
+      property: 'pagerank_number_1',
+      node_cypher:'none',
+      rel_cypher: 'MATCH (n:User)-[r:WROTE]->(m:review)-[r1:ABOUT]->(b:Business) where Business.business_id = 'lHYiCS-y8AFjUitv6MGpxg'  return id(n) as source, id(n) as target, 1 as weight'
+    }
+
+# Find Important Users by Betweenness
+MATCH (l:User)
+WITH collect(l) AS users
+CALL apoc.algo.betweenness(['FRIEND'], users, 'OUTGOING') YIELD node, score
+SET node.betweenness = score
+RETURN node AS user, score ORDER BY score DESC LIMIT 25
+
+####################################################################
+Explore Graph Data
+####################################################################
+# Show simple business cateogory relationship
+match (b:Business)-[r:UNDER]->(c:cat {cat_name:'Restaurants'}),
+(u:User)-[rw:WROTE]->(rr:review)-[r1:ABOUT]->(b),
+(u:User)-[rw1:WROTE]->(rr1:review)-[r3:ABOUT]->(b1:Business),
+(rr)-[r2:CONTAINS]->(s:Star),
+(rr1)-[r4:CONTAINS]->(s1:Star),
+(b)-[rl:LOCATED]->(ci:city)<-[rl2:LOCATED]-(b1)
+where (s.star='1' OR s.star='5') AND (s1.star='1' OR s1.star='5')
+Return c,b,r,rr,r1,r2,s,u,rw,r3,r4,s1,b1,ci
+Limit 20
+
+# Look for potnetial fault users
+match (u:User)-[rW:WROTE]->(r:review)-[rA:ABOUT]->(b:Business),
+(u)-[rW1:WROTE]->(r1:review)-[rA1:ABOUT]->(b1:Business),
+(c:city),
+(ca:cat),
+(r)-[:CONTAINS]->(s:Star),
+(r1)-[:CONTAINS]->(s1:Star),
+(b)-[:UNDER]->(ca)<-[:UNDER]-(b1)
+where (b)-[:LOCATED]->(c)<-[:LOCATED]-(b1) AND u.review_count=2 AND (s.star='1' OR s.star='5') AND  (s1.star='1' OR s1.star='5')
+Return u,rW,r,rA,b,rW1,r1,rA1,b1,c,s,s1
+limit 10
+
+# Look for specific business
+MATCH (n:User)-[r:WROTE]->(m:review)-[r1:ABOUT]->(b:Business), (m)-[r2:CONTAINS]->(s:Star), (n)-[r3:FRIEND]-()
+where b.business_id = 'lHYiCS-y8AFjUitv6MGpxg'
+RETURN n,r,m,r1,b,s,r2,r3
+
+####################################################################
+Identify Fault Users by Simple Query 
+####################################################################
+match (u:User)-[rW:WROTE]->(r:review)-[rA:ABOUT]->(b:Business),
+(u)-[rW1:WROTE]->(r1:review)-[rA1:ABOUT]->(b1:Business),
+(c:city),
+(ca:cat),
+(r)-[:CONTAINS]->(s:Star),
+(r1)-[:CONTAINS]->(s1:Star),
+(b)-[:UNDER]->(ca)<-[:UNDER]-(b1)
+where (b)-[:LOCATED]->(c)<-[:LOCATED]-(b1) AND ((s.star='1' AND s1.star='5') OR  (s1.star='1' AND  s.star='5'))
+Return u.user_id, u.name, u.review_count
+
+# To visualise one fraud user and his comments and shops
+match p1=(u:User)-[rW:WROTE]->(r:review)-[rA:ABOUT]->(b:Business),
+p2=(u)-[rW1:WROTE]->(r1:review)-[rA1:ABOUT]->(b1:Business),
+(c:city),
+(ca:cat),
+p3=(r)-[C1:CONTAINS]->(s:Star),
+p4=(r1)-[C2:CONTAINS]->(s1:Star),
+p5=(b)-[:UNDER]->(ca)<-[:UNDER]-(b1),
+p6=(b)-[:LOCATED]->(c)<-[:LOCATED]-(b1)
+where (b)-[:LOCATED]->(c)<-[:LOCATED]-(b1) AND ((s.star='1' AND s1.star='5') OR  (s1.star='1' AND  s.star='5'))
+Return p1, p2,p3,p4, p5, p6
+limit 2
+
+####################################################################
+Apply Graph Algorithm
+####################################################################
+# Calculate Users' PageRank
+CALL algo.pageRank('User','FRIEND',{iterations:100, dampingFactor:0.85, write: true, writeProperty:'userpagerank'})
+YIELD loadMillis, computeMillis, writeMillis
+
+# Get the importance of users
+MATCH (n:User)-[r:WROTE]->(m:review)-[r1:ABOUT]->(b:Business), (m)-[r2:CONTAINS]->(s:Star), (n)-[r3:FRIEND]-()
+where b.business_id = 'lHYiCS-y8AFjUitv6MGpxg'
+RETURN distinct  n.userpagerank, n.review_count, n.user_id ORDER BY n.userpagerank desc
+
+# PageRank on Independent Shop Example
+MATCH (n:User)-[r:WROTE]->(m:review)-[r1:ABOUT]->(b:Business), (m)-[r2:CONTAINS]->(s:Star), (n)-[r3:FRIEND]-()
+where b.name = '"Oregano\'s Pizza Bistro"'
+RETURN distinct n.name, n.userpagerank, n.review_count, count(r3) AS friendcount ORDER BY n.userpagerank desc
+
+# Visualise PageRank
+MATCH (n:User)-[r:WROTE]->(m:review)-[r1:ABOUT]->(b:Business), (m)-[r2:CONTAINS]->(s:Star), (n)-[r3:FRIEND]-()
+where b.name = '"Oregano\'s Pizza Bistro"' AND n.userpagerank > 0.35
+RETURN n,r,m,r1,b,s,r2 limit 100
+
+# Show Strongly Connected Component Structure
+match (u:User)-[W:WROTE]->(r:review)-[A:ABOUT]->(b:Business), (u)-[:FRIEND]-(u1) return u,r,b,u1 limit 30
+
+# Show PageRank Structure
+match (u:User)-[r:FRIEND]-(u1:User)-[r2:FRIEND]-(u2:User)-[r3:FRIEND]-(u3:User)
+where u.userpagerank > 20 
+AND u1.userpagerank > 2 AND u1.userpagerank <10
+AND u2.userpagerank > 1 AND u2.userpagerank < 2
+AND u3.userpagerank >0.5 AND u3.userpagerank <1
+return u,u1,u2,u3,r,r2,r3 limit 50
+
+
