@@ -1,6 +1,6 @@
 Overview: 
 Load CSVs to Neo4j --> Explore Graph Data --> Identify Fault Users by Simple Query --> Apply Graph Algorithm
-
+# Make sure you have all the CSVs from Yelp
 ####################################################################
 Load CSVs to Neo4j
 ####################################################################
